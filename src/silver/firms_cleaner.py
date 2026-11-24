@@ -96,3 +96,22 @@ def deduplicate_detections(df: DataFrame) -> DataFrame:
         .filter(F.col("_row_num") == 1)
         .drop("_row_num")
     )
+
+def write_firms_silver_table(
+    df: DataFrame,
+    table_name: str = "workspace.default.silver_nasa_firms",
+) -> None:
+    (
+        df.write.format("delta")
+        .mode("overwrite")
+        .option("overwriteSchema", "true")
+        .saveAsTable(table_name)
+    )
+
+def clean_firms_silver(df: DataFrame) -> DataFrame:
+    return (
+        df.transform(cast_and_parse_timestamps)
+        .transform(enrich_confidence)
+        .transform(filter_valid_detections)
+        .transform(deduplicate_detections)
+    )

@@ -1,5 +1,6 @@
 import json
 import shutil
+import sys
 import time
 from datetime import date, datetime, timedelta
 from io import StringIO
@@ -9,12 +10,24 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 import requests
 
-DEFAULT_MAP_KEY = "8cc1b161665a97c43f4846c29e83b12c"
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+from config.secrets import get_secret  # noqa: E402
+
 DEFAULT_BASE_URL = "https://firms.modaps.eosdis.nasa.gov/api/area/csv"
 DEFAULT_SOURCE = "VIIRS_SNPP_SP"
 DEFAULT_NRT_SOURCE = "VIIRS_NOAA20_NRT"
 DEFAULT_BBOX = "-7.55,37.94,-4.65,40.49"
 DEFAULT_OUTPUT_FILE = "/Volumes/workspace/default/bronze_nasa_firms/data-2015-2026.json"
+
+
+def _get_map_key(map_key: Optional[str] = None) -> str:
+    key = (map_key or get_secret("FIRMS_MAP_KEY")).strip()
+    if not key:
+        raise ValueError("No se encontró FIRMS_MAP_KEY en Databricks Secrets.")
+    return key
 
 
 def _parse_date(d: str) -> date:
@@ -45,7 +58,7 @@ def _merge_tmp_into_volume(tmp_jsonl: Path, volume_json: Path, overwrite_volume:
 def fetch_firms_block(
     start_date_str: str,
     day_range: int = 5,
-    map_key: str = DEFAULT_MAP_KEY,
+    map_key: Optional[str] = None,
     base_url: str = DEFAULT_BASE_URL,
     source: str = DEFAULT_SOURCE,
     bbox: str = DEFAULT_BBOX,
@@ -55,7 +68,8 @@ def fetch_firms_block(
     Descarga un bloque de `day_range` días desde `start_date_str` (YYYY-MM-DD)
     y devuelve un DataFrame de pandas con metadatos de ingesta.
     """
-    url = f"{base_url.rstrip('/')}/{map_key.strip()}/{source}/{bbox}/{day_range}/{start_date_str}"
+    effective_key = _get_map_key(map_key)
+    url = f"{base_url.rstrip('/')}/{effective_key}/{source}/{bbox}/{day_range}/{start_date_str}"
     response = requests.get(url, timeout=timeout)
     response.raise_for_status()
 
@@ -79,7 +93,7 @@ def _ingest_range_to_handle(
     date_from: str,
     date_to: str,
     step_days: int,
-    map_key: str,
+    map_key: Optional[str],
     base_url: str,
     source: str,
     bbox: str,
@@ -131,11 +145,12 @@ def _ingest_range_to_handle(
 def ingest_firms_spliced_2015_2026(
     output_file: str = DEFAULT_OUTPUT_FILE,
     step_days: int = 5,
-    map_key: str = DEFAULT_MAP_KEY,
+    map_key: Optional[str] = None,
     base_url: str = DEFAULT_BASE_URL,
     bbox: str = DEFAULT_BBOX,
     sleep_seconds: float = 0.5,
     reset_file: bool = True,
+    nrt_date_to: Optional[str] = None,
     segments: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, int]:
     """
@@ -143,6 +158,11 @@ def ingest_firms_spliced_2015_2026(
     al archivo final del Volume sin usar `append` sobre FUSE.
     """
     if segments is None:
+        nrt_from = "2026-08-01"
+        nrt_to = nrt_date_to or date.today().isoformat()
+        if _parse_date(nrt_to) < _parse_date(nrt_from):
+            nrt_to = nrt_from
+
         segments = [
             {
                 "name": "historical_sp",
@@ -152,9 +172,9 @@ def ingest_firms_spliced_2015_2026(
             },
             {
                 "name": "recent_nrt",
-                "source": "VIIRS_NOAA20_NRT",
-                "date_from": "2026-08-01",
-                "date_to": "2026-11-19",
+                "source": DEFAULT_NRT_SOURCE,
+                "date_from": nrt_from,
+                "date_to": nrt_to,
             },
         ]
 
@@ -204,7 +224,7 @@ def ingest_firms_incremental(
     source: str = DEFAULT_NRT_SOURCE,
     splice_label: str = "incremental_nrt",
     step_days: int = 1,
-    map_key: str = DEFAULT_MAP_KEY,
+    map_key: Optional[str] = None,
     base_url: str = DEFAULT_BASE_URL,
     bbox: str = DEFAULT_BBOX,
     sleep_seconds: float = 0.4,
