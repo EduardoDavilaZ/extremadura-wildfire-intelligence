@@ -37,7 +37,8 @@ def build_firms_grid(df_silver: DataFrame, step: float = 0.05) -> DataFrame:
 
 def build_firms_prev_7d(df_silver: DataFrame, step: float = 0.05) -> DataFrame:
     df_cell_daily = (
-        df_silver.withColumn("lat_cell", F.round(F.round(F.col("latitude") / step) * step, 4))
+        df_silver
+        .withColumn("lat_cell", F.round(F.round(F.col("latitude") / step) * step, 4))
         .withColumn("lon_cell", F.round(F.round(F.col("longitude") / step) * step, 4))
         .groupBy("lat_cell", "lon_cell", "acq_date")
         .agg(
@@ -52,8 +53,14 @@ def build_firms_prev_7d(df_silver: DataFrame, step: float = 0.05) -> DataFrame:
         .rangeBetween(-7 * 86400, -1)
     )
 
-    return df_cell_daily.withColumn(
-        "prev_7d_frp_sum", F.round(F.sum("day_frp_sum").over(w_7d_prev), 2)
-    ).withColumn(
-        "prev_7d_detections", F.sum("day_detections").over(w_7d_prev)
+    return (
+        df_cell_daily
+        .withColumn(
+            "prev_7d_frp_sum",
+            F.coalesce(F.round(F.sum("day_frp_sum").over(w_7d_prev), 2), F.lit(0.0)),
+        )
+        .withColumn(
+            "prev_7d_detections",
+            F.coalesce(F.sum("day_detections").over(w_7d_prev), F.lit(0).cast("bigint")),
+        )
     )
