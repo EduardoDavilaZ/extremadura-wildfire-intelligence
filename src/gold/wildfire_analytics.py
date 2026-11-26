@@ -1,27 +1,32 @@
 from pyspark.sql import SparkSession, DataFrame
 from pyspark.sql import functions as F
 
+from src.catalog import GOLD_MITECO_ANNUAL_TABLE, SILVER_MITECO_TABLE
+from src.delta import save_delta_table
 
-def build_gold_annual_summary(
-    spark: SparkSession,
-    silver_miteco_table: str = "workspace.default.silver_miteco_incendios",
-    target_gold_table: str = "workspace.default.gold_miteco_resumen_anual"
-) -> DataFrame:
-    # Genera el resumen anual de incendios por provincia en Extremadura
-    df_silver = spark.read.table(silver_miteco_table)
+DEFAULT_SILVER_MITECO_TABLE = SILVER_MITECO_TABLE
+DEFAULT_GOLD_MITECO_TABLE = GOLD_MITECO_ANNUAL_TABLE
 
-    df_gold = (
-        df_silver
-        .groupBy("anio", "provincia")
+
+def transform_gold_annual_summary(df_silver: DataFrame) -> DataFrame:
+    return (
+        df_silver.groupBy("anio", "provincia")
         .agg(F.count("num_parte").alias("total_incendios"))
         .orderBy("anio", "provincia")
     )
 
-    (
-        df_gold.write
-        .format("delta")
-        .mode("overwrite")
-        .saveAsTable(target_gold_table)
-    )
 
-    return df_gold
+def save_gold_annual_summary(
+    df_gold: DataFrame,
+    target_table: str = DEFAULT_GOLD_MITECO_TABLE,
+) -> DataFrame:
+    return save_delta_table(df_gold, target_table, overwrite_schema=False)
+
+
+def build_gold_annual_summary(
+    spark: SparkSession,
+    silver_miteco_table: str = DEFAULT_SILVER_MITECO_TABLE,
+    target_gold_table: str = DEFAULT_GOLD_MITECO_TABLE,
+) -> DataFrame:
+    df_gold = transform_gold_annual_summary(spark.read.table(silver_miteco_table))
+    return save_gold_annual_summary(df_gold, target_table=target_gold_table)

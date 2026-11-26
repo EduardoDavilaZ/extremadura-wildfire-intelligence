@@ -13,10 +13,11 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from config.secrets import get_secret  # noqa: E402
+from src.catalog import BRONZE_AEMET_PATH  # noqa: E402
 
 DEFAULT_BASE_URL = "https://opendata.aemet.es/opendata/api"
 DEFAULT_PROVINCES: Set[str] = {"BADAJOZ", "CACERES"}
-DEFAULT_OUTPUT_FILE = "/Volumes/workspace/default/bronze_aemet/data-2015-2026.jsonl"
+DEFAULT_OUTPUT_FILE = BRONZE_AEMET_PATH
 
 
 def _get_api_key(api_key: Optional[str] = None) -> str:
@@ -36,10 +37,7 @@ def _format_aemet_datetime(d: date, end_of_day: bool = False) -> str:
 
 
 def _merge_tmp_into_volume(tmp_jsonl: Path, volume_json: Path, overwrite_volume: bool = False) -> None:
-    """
-    Combina `tmp_jsonl` (en almacenamiento local /tmp) con `volume_json` (en Volume)
-    evitando operaciones de `append` (`O_APPEND` / `seek`) directas sobre FUSE.
-    """
+    # Fusiona /tmp -> Volume sin append directo sobre FUSE.
     volume_json.parent.mkdir(parents=True, exist_ok=True)
     merged_tmp = Path(f"/tmp/merged_{volume_json.name}")
 
@@ -63,12 +61,7 @@ def _aemet_get_json(
     max_retries: int = 5,
     base_backoff: float = 2.0,
 ) -> Optional[Any]:
-    """
-    Ejecuta el flujo de dos pasos de AEMET OpenData:
-    1. Pide el endpoint con cabecera `api_key` para obtener la URL en `datos`.
-    2. Descarga el payload real desde `datos`.
-    Devuelve `None` si AEMET responde 404 (sin datos para la consulta).
-    """
+    # Flujo AEMET OpenData: meta (api_key) -> payload en `datos`. 404 -> None.
     headers = {"api_key": api_key, "cache-control": "no-cache"}
 
     for attempt in range(max_retries):
@@ -120,10 +113,7 @@ def get_extremadura_stations(
     base_url: str = DEFAULT_BASE_URL,
     provinces: Optional[Iterable[str]] = None,
 ) -> List[Dict[str, Any]]:
-    """
-    Consulta el inventario de estaciones de AEMET y filtra las de Extremadura
-    (por defecto BADAJOZ y CACERES).
-    """
+    # Inventario AEMET filtrado a provincias de Extremadura.
     effective_key = _get_api_key(api_key)
     allowed_provinces = {p.strip().upper() for p in (provinces or DEFAULT_PROVINCES)}
     url = f"{base_url.rstrip('/')}/valores/climatologicos/inventarioestaciones/todasestaciones"
@@ -155,9 +145,7 @@ def fetch_station_daily_block(
     base_url: str = DEFAULT_BASE_URL,
     station_meta: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
-    """
-    Descarga climatología diaria para una estación (`idema`) entre `date_from` y `date_to` (YYYY-MM-DD).
-    """
+    # Climatología diaria de una estación (idema) entre YYYY-MM-DD.
     effective_key = _get_api_key(api_key)
     d_ini = _format_aemet_datetime(_parse_date(date_from), end_of_day=False)
     d_fin = _format_aemet_datetime(_parse_date(date_to), end_of_day=True)
@@ -248,10 +236,7 @@ def ingest_aemet_historical_2015_today(
     base_url: str = DEFAULT_BASE_URL,
     provinces: Optional[Iterable[str]] = None,
 ) -> Dict[str, int]:
-    """
-    Descarga el histórico diario de AEMET para Extremadura (desde 2015-01-01 hasta hoy)
-    en ventanas de `window_days` días, escribe en `/tmp` y vuelca al Volume.
-    """
+    # Histórico diario Extremadura: ventanas de `window_days`, /tmp y volcado al Volume.
     effective_key = _get_api_key(api_key)
     end_str = date_to or date.today().isoformat()
     stations = get_extremadura_stations(
@@ -295,9 +280,7 @@ def ingest_aemet_incremental(
     base_url: str = DEFAULT_BASE_URL,
     provinces: Optional[Iterable[str]] = None,
 ) -> int:
-    """
-    Descarga un rango reciente de datos diarios de AEMET y lo añade al Volume.
-    """
+    # Añade un rango reciente de diarios AEMET al Volume.
     effective_key = _get_api_key(api_key)
     end_str = date_to or date.today().isoformat()
     stations = get_extremadura_stations(

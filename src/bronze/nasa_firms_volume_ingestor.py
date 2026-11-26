@@ -15,12 +15,13 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from config.secrets import get_secret  # noqa: E402
+from src.catalog import BRONZE_FIRMS_PATH, FIRMS_BBOX  # noqa: E402
 
 DEFAULT_BASE_URL = "https://firms.modaps.eosdis.nasa.gov/api/area/csv"
 DEFAULT_SOURCE = "VIIRS_SNPP_SP"
 DEFAULT_NRT_SOURCE = "VIIRS_NOAA20_NRT"
-DEFAULT_BBOX = "-7.55,37.94,-4.65,40.49"
-DEFAULT_OUTPUT_FILE = "/Volumes/workspace/default/bronze_nasa_firms/data-2015-2026.json"
+DEFAULT_BBOX = FIRMS_BBOX
+DEFAULT_OUTPUT_FILE = BRONZE_FIRMS_PATH
 
 
 def _get_map_key(map_key: Optional[str] = None) -> str:
@@ -35,10 +36,7 @@ def _parse_date(d: str) -> date:
 
 
 def _merge_tmp_into_volume(tmp_jsonl: Path, volume_json: Path, overwrite_volume: bool = False) -> None:
-    """
-    Combina `tmp_jsonl` (en almacenamiento local /tmp) con `volume_json` (en Volume)
-    evitando operaciones de `append` (`O_APPEND` / `seek`) directas sobre FUSE.
-    """
+    # Fusiona /tmp -> Volume sin append directo sobre FUSE.
     volume_json.parent.mkdir(parents=True, exist_ok=True)
     merged_tmp = Path(f"/tmp/merged_{volume_json.name}")
 
@@ -64,10 +62,7 @@ def fetch_firms_block(
     bbox: str = DEFAULT_BBOX,
     timeout: int = 30,
 ) -> pd.DataFrame:
-    """
-    Descarga un bloque de `day_range` días desde `start_date_str` (YYYY-MM-DD)
-    y devuelve un DataFrame de pandas con metadatos de ingesta.
-    """
+    # Bloque FIRMS de `day_range` días desde YYYY-MM-DD.
     effective_key = _get_map_key(map_key)
     url = f"{base_url.rstrip('/')}/{effective_key}/{source}/{bbox}/{day_range}/{start_date_str}"
     response = requests.get(url, timeout=timeout)
@@ -153,10 +148,7 @@ def ingest_firms_spliced_2015_2026(
     nrt_date_to: Optional[str] = None,
     segments: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, int]:
-    """
-    Ejecuta el barrido histórico por empalme en `/tmp` y luego vuelca el resultado
-    al archivo final del Volume sin usar `append` sobre FUSE.
-    """
+    # Histórico por empalme (SP + NRT) en /tmp y volcado al Volume.
     if segments is None:
         nrt_from = "2026-08-01"
         nrt_to = nrt_date_to or date.today().isoformat()
@@ -229,10 +221,7 @@ def ingest_firms_incremental(
     bbox: str = DEFAULT_BBOX,
     sleep_seconds: float = 0.4,
 ) -> int:
-    """
-    Descarga solo un rango reciente (ej. los últimos días tras la última fecha en Bronze)
-    en `/tmp` y lo añade al archivo JSON del Volume de forma segura.
-    """
+    # Rango reciente NRT: escribe en /tmp y añade al Volume.
     end_str = date_to or date.today().isoformat()
     tmp_path = Path(f"/tmp/firms_inc_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.jsonl")
     target_path = Path(output_file)

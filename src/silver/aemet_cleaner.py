@@ -1,28 +1,26 @@
-from pyspark.sql import SparkSession, functions as F
+from pyspark.sql import SparkSession, DataFrame, functions as F
 from pyspark.sql.window import Window
 
-DEFAULT_BRONZE_PATH = "/Volumes/workspace/default/bronze_aemet/data-2015-2026.jsonl"
-DEFAULT_SILVER_TABLE = "workspace.default.silver_aemet_diarios_extremadura"
+from src.catalog import BRONZE_AEMET_PATH, SILVER_AEMET_TABLE
+from src.delta import save_delta_table
 
-def _col_or_null(df, col_name, dtype="string"):
+DEFAULT_BRONZE_PATH = BRONZE_AEMET_PATH
+DEFAULT_SILVER_TABLE = SILVER_AEMET_TABLE
+
+
+def _col_or_null(df: DataFrame, col_name: str, dtype: str = "string"):
     if col_name in df.columns:
         return F.col(col_name).cast(dtype)
     return F.lit(None).cast(dtype)
 
 
-def _to_double_comma(df, col_name):
+def _to_double_comma(df: DataFrame, col_name: str):
     raw_str = _col_or_null(df, col_name, "string")
     cleaned = F.trim(F.regexp_replace(raw_str, ",", "."))
     return F.when(cleaned.rlike(r"^-?\d+(\.\d+)?$"), cleaned.cast("double"))
 
 
-def build_silver_aemet(
-    spark: SparkSession,
-    bronze_path: str = DEFAULT_BRONZE_PATH,
-    silver_table: str = DEFAULT_SILVER_TABLE,
-) -> dict:
-    df_raw = spark.read.json(bronze_path)
-
+def transform_silver_aemet(df_raw: DataFrame) -> DataFrame:
     prec_str = F.trim(_col_or_null(df_raw, "prec", "string"))
     prec_is_ip = F.upper(prec_str) == "IP"
     prec_num = F.when(prec_is_ip, F.lit(0.0)).otherwise(_to_double_comma(df_raw, "prec"))
@@ -79,7 +77,6 @@ def build_silver_aemet(
     )
 
     w_dedup = Window.partitionBy("indicativo", "fecha_dt").orderBy(F.col("ingested_at_ts").desc_nulls_last())
-
     df_dedup = (
         df_typed
         .filter(F.col("indicativo").isNotNull() & F.col("fecha_dt").isNotNull())
@@ -91,12 +88,12 @@ def build_silver_aemet(
     df_dry_flag = df_dedup.withColumn(
         "es_dia_seco",
         F.when(F.col("prec_mm").isNull(), F.lit(None).cast("int"))
-            .when(F.col("prec_mm") < F.lit(0.2), F.lit(1))
-            .otherwise(F.lit(0)),
+        .when(F.col("prec_mm") < F.lit(0.2), F.lit(1))
+        .otherwise(F.lit(0)),
     )
 
     w_station_time = Window.partitionBy("indicativo").orderBy("fecha_dt")
-
+    # eqNullSafe evita fusionar rachas separadas por días con precipitación NULL.
     df_streaks = (
         df_dry_flag
         .withColumn(
@@ -114,7 +111,7 @@ def build_silver_aemet(
     w_14d = Window.partitionBy("indicativo").orderBy("fecha_dt").rowsBetween(-13, 0)
     w_30d = Window.partitionBy("indicativo").orderBy("fecha_dt").rowsBetween(-29, 0)
 
-    df_silver = (
+    return (
         df_streaks
         .withColumn(
             "dias_secos_consecutivos",
@@ -171,13 +168,15 @@ def build_silver_aemet(
         )
     )
 
-    (
-        df_silver.write
-        .format("delta")
-        .mode("overwrite")
-        .option("overwriteSchema", "true")
-        .saveAsTable(silver_table)
-    )
 
-    total_rows = spark.table(silver_table).count()
-    return {"silver_table": silver_table, "total_rows": total_rows}
+def save_silver_aemet(df_silver: DataFrame, silver_table: str = DEFAULT_SILVER_TABLE) -> DataFrame:
+    return save_delta_table(df_silver, silver_table)
+
+
+def build_silver_aemet(
+    spark: SparkSession,
+    bronze_path: str = DEFAULT_BRONZE_PATH,
+    silver_table: str = DEFAULT_SILVER_TABLE,
+) -> DataFrame:
+    df_silver = transform_silver_aemet(spark.read.json(bronze_path))
+    return save_silver_aemet(df_silver, silver_table=silver_table)

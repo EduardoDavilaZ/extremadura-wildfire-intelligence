@@ -1,6 +1,24 @@
 from pyspark.sql import DataFrame, Window
 from pyspark.sql import functions as F
 
+from src.catalog import (
+    FIRMS_GRID_STEP,
+    GOLD_FIRMS_GRID_TABLE,
+    GOLD_FIRMS_MONTHLY_TABLE,
+    GOLD_FIRMS_PREV_7D_TABLE,
+)
+from src.delta import save_delta_table
+
+DEFAULT_GRID_STEP = FIRMS_GRID_STEP
+SECONDS_PER_DAY = 86400
+
+
+def add_grid_cells(df: DataFrame, step: float = DEFAULT_GRID_STEP) -> DataFrame:
+    return (
+        df.withColumn("lat_cell", F.round(F.round(F.col("latitude") / step) * step, 4))
+        .withColumn("lon_cell", F.round(F.round(F.col("longitude") / step) * step, 4))
+    )
+
 
 def build_firms_monthly(df_silver: DataFrame) -> DataFrame:
     return (
@@ -20,10 +38,9 @@ def build_firms_monthly(df_silver: DataFrame) -> DataFrame:
     )
 
 
-def build_firms_grid(df_silver: DataFrame, step: float = 0.05) -> DataFrame:
+def build_firms_grid(df_silver: DataFrame, step: float = DEFAULT_GRID_STEP) -> DataFrame:
     return (
-        df_silver.withColumn("lat_cell", F.round(F.round(F.col("latitude") / step) * step, 4))
-        .withColumn("lon_cell", F.round(F.round(F.col("longitude") / step) * step, 4))
+        add_grid_cells(df_silver, step=step)
         .groupBy("lat_cell", "lon_cell")
         .agg(
             F.count("*").alias("detections"),
@@ -35,11 +52,9 @@ def build_firms_grid(df_silver: DataFrame, step: float = 0.05) -> DataFrame:
     )
 
 
-def build_firms_prev_7d(df_silver: DataFrame, step: float = 0.05) -> DataFrame:
+def build_firms_prev_7d(df_silver: DataFrame, step: float = DEFAULT_GRID_STEP) -> DataFrame:
     df_cell_daily = (
-        df_silver
-        .withColumn("lat_cell", F.round(F.round(F.col("latitude") / step) * step, 4))
-        .withColumn("lon_cell", F.round(F.round(F.col("longitude") / step) * step, 4))
+        add_grid_cells(df_silver, step=step)
         .groupBy("lat_cell", "lon_cell", "acq_date")
         .agg(
             F.count("*").alias("day_detections"),
@@ -47,10 +62,11 @@ def build_firms_prev_7d(df_silver: DataFrame, step: float = 0.05) -> DataFrame:
         )
     )
 
+    # Ventana en segundos Unix: 7 días naturales previos, excluye el día actual.
     w_7d_prev = (
         Window.partitionBy("lat_cell", "lon_cell")
         .orderBy(F.col("acq_date").cast("timestamp").cast("long"))
-        .rangeBetween(-7 * 86400, -1)
+        .rangeBetween(-7 * SECONDS_PER_DAY, -1)
     )
 
     return (
@@ -64,3 +80,15 @@ def build_firms_prev_7d(df_silver: DataFrame, step: float = 0.05) -> DataFrame:
             F.coalesce(F.sum("day_detections").over(w_7d_prev), F.lit(0).cast("bigint")),
         )
     )
+
+
+def save_gold_firms_monthly(df: DataFrame, table_name: str = GOLD_FIRMS_MONTHLY_TABLE) -> DataFrame:
+    return save_delta_table(df, table_name)
+
+
+def save_gold_firms_grid(df: DataFrame, table_name: str = GOLD_FIRMS_GRID_TABLE) -> DataFrame:
+    return save_delta_table(df, table_name)
+
+
+def save_gold_firms_prev_7d(df: DataFrame, table_name: str = GOLD_FIRMS_PREV_7D_TABLE) -> DataFrame:
+    return save_delta_table(df, table_name)
